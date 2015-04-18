@@ -1,0 +1,44 @@
+{
+  "name": "oada-converters",
+  "version": "0.0.0",
+  "description": "Converters to/from various formats",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha -w",
+    "cover": "istanbul cover _mocha",
+    "lint": "jshint --reporter node_modules/jshint-stylish/stylish.js .",
+    "style": "jscs .",
+    "clean": "rm -rf ./coverage"
+  },
+  "directories": {
+    "test": "test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OADA/oada-converters.git"
+  },
+  "keywords": [
+    "oada"
+  ],
+  "author": {
+    "name": "Aaron Ault",
+    "email": "aaron@openag.io",
+    "url": "http://openag.io"
+  },
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/OADA/oada-converters/issues"
+  },
+  "homepage": "https://github.com/OADA/oada-converters",
+  "devDependencies": {
+    "chai": "^2.2.0",
+    "gulp": "^3.8.11",
+    "gulp-jscs": "^1.5.2",
+    "gulp-jshint": "^1.10.0",
+    "istanbul": "^0.3.13",
+    "jscs": "^1.12.0",
+    "jshint": "^2.7.0",
+    "jshint-stylish": "^1.0.1",
+    "mocha": "^2.2.4"
+  }
+}

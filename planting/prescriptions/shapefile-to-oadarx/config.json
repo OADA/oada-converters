@@ -1,0 +1,10 @@
+{
+  "namespace": {
+    "oada.planting.prescription": {
+      "population": {
+        "shapefile_col": "POPULATION",
+        "units": "seeds/ac"
+      }
+    }
+  }
+}

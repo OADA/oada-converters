@@ -1,0 +1,25 @@
+language: node_js
+node_js:
+- '0.10'
+- '0.11'
+- '0.12'
+- node
+- iojs
+sudo: false
+deploy:
+  provider: npm
+  email: aaron@openag.io
+  api_key:
+    secure: K6IW0kQZV3pCyNpwTwDgCuWQ+6hzUkEY0Ojz2kMaI9hWFEkVqgRHAXd3i7uBxtOxyDJVroYLeeem5LPuIsnYHSaUkAzQR445f186NIsAUji4GNdm/LPCsLD8ZmkHkQGo7L7on2mOFOgzVKeJHPiYElbk3ArpCBbA5GXhRJS4/ac=
+  on:
+    tags: true
+    all_branches: true
+    repo: OADA/oada-converters
+before_install:
+ - npm install -g coveralls
+script:
+- npm run lint
+- npm run style
+- npm run cover
+after_success:
+- cat ./coverage/lcov.info | coveralls --verbose
