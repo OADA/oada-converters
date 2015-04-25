@@ -242,7 +242,7 @@ var _ShapeToOADARx = {
   },
 
   write: function(data, output_filename) {
-    return fs.writeFileAsync(output_filename, JSON.stringify(data, false, "  "));
+    return fs.writeFileAsync(output_filename, JSON.stringify(data));
   },
 
 };
