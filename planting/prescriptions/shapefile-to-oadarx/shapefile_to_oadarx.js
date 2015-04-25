@@ -1,6 +1,8 @@
-var shapefilelib = require("shapefile");
-var fs = require("fs");
 var _ = require('lodash');
+var Promise = require("bluebird");
+Promise.longStackTraces();
+var shp = require("shpjs");
+var fs = Promise.promisifyAll(require("fs"));
 
 var config = null;
 var input_filename = null;
@@ -10,239 +12,237 @@ var dbg = function() {}; //console.log;
 
 var _ShapeToOADARx = {
 
+  ///////////////////////////////////////////////////////////////////////
+  // Main function to perform the conversion:
   run: function(input_filename, output_filename, config, cb) {
     var self = this;
-    // Read the shape file:
-    dbg("run: calling read...");
-    self.read(input_filename, function(err, shp_data) {
-      if (err) return cb(err);
-      // Convert the in-memory object to the OADA format
-      dbg("run: calling convert...");
-      self.convert(shp_data, config, input_filename, function(err, rx_data) {
-        if (err) return cb(err);
-        // Write the object back to the disk
-        dbg("run: calling write...");
-        self.write(output_filename, rx_data, function(err) {
-          if (err) return cb(err);
-          return cb();
+    return new Promise(function(resolve, reject) {
+      var shp_data;
+      var oada_data;;
+      // Read the shape file:
+      self.read(input_filename)
+      
+      .then(function(data) {
+        shp_data = data;
+        return self.guessColumns(shp_data, config)
+
+      }).then(function(colname_mappings) {
+        return self.convert(shp_data, colname_mappings, config, output_filename);
+
+      }).then(function(converted_data) {
+        oada_data = converted_data;
+        return self.write(oada_data, output_filename);
+
+      }).then(resolve)
+      .catch(reject);
+    });   
+  },
+
+
+  ///////////////////////////////////////////////////////////////////////////
+  // Reads the shapefile into memory with a shapefile-to-geojson library.
+  // Note that the library itself can also accept a URL to get a remote
+  // file (i.e. from S3....), but you'll have to add an if statement
+  // to check for http(s)....
+  read: function(input_filename) {
+    return new Promise(function(resolve, reject) {
+      var str = "";
+      if (input_filename.slice(-4) === ".zip") {
+        // .zip works!
+        fs.readFileAsync(input_filename).then(function(buffer) {
+          shp(buffer).then(resolve).catch(reject);
         });
-      });
+        return;
+      }
+      // remove extension for library if it's .shp.
+      input_filename = input_filename.replace(".shp", "");
+      Promise.all([
+        fs.readFileAsync(input_filename + ".shp"),
+        fs.readFileAsync(input_filename + ".dbf")
+      ]).then(function(args) {
+        resolve(shp.combine([shp.parseShp(args[0]), shp.parseDbf(args[1])]));
+      }).catch(reject);
     });
   },
 
-  validateConfig: function(config) {
-    //supported configs: 
-    //Option 1:
-    // Population column is defined as the first column found with numbers in the
-    // range specified.  The namespace and units given will be put in output file.
-    //{
-    //  "namespace": {
-    //    "oada.planting.prescription": {
-    //      "population": {
-    //        "shapefile_col_number_range": {
-    //          "min": 10000,
-    //          "max": 50000,
-    //        }
-    //        "units": "seeds/ac"
-    //} } } }
-    //
-    //Option 2: 
-    // Population column has a particular name like "POPULATION".  The namespace
-    // and units given will be put in the output file.
-    //{
-    //  "namespace": {
-    //    "oada.planting.prescription": {
-    //      "population": {
-    //        "shapefile_col_number_range": {
-    //          "min": 10000,
-    //          "max": 50000,
-    //        }
-    //        "units": "seeds/ac"
-    //} } } }
 
-    if (   typeof config !== 'object'
-        || typeof config.namespace !== 'object'
-        || typeof config.namespace["oada.planting.prescription"] !== 'object') {
-      return "ERROR: config invalid.  Must use the oada.planting.prescription namespace.";
-    }
-    var n = config.namespace["oada.planting.prescription"];
-    for(var key in n) {
-      var val = n[key];
-      if (key === 'src') {
-        if (typeof val !== 'string') return "ERROR: config invalid.  src must be a string for oada.planting.prescription namespace.";
-        continue;
-      }
-      if (typeof val.shapefile_col_number_range === 'undefined'
-          && typeof val.shapefile_col_name === 'undefined') {
-        return "ERROR: config invalid.  Must use either shapefile_col_number_range or shapefile_col_name in key "+key;
-      }
-      // If this is a col_name configuration, check that name is a string:
-      if (typeof val.shapefile_col_name !== 'undefined'
-          && typeof val.shapefile_col_name !== 'string') {
-        return "ERROR: config invalid.  Must use a string for the value of shapefile_col_name on property "+key;
-      }
-      // If this is a col_number_range configuration, check that we have max and min:
-      if (typeof val.shapefile_col_number_range !== 'undefined'
-          && (typeof val.shapefile_col_number_range.min !== 'number'
-              || typeof val.shapefile_col_number_range.max !== 'number')) {
-        return "ERROR: config invalid.  Must use min/max for shapefile_col_number_range for key "+key;
-      }
-      // If this has a template_value, check that we can find a key with the value "SHP_VAL_HERE":
-      if (typeof val.template_value !== 'undefined') {
-        var found = _.find(val.template_value, function(v) { return (v === "SHP_VAL_HERE"); })
-        if (found !== "SHP_VAL_HERE") return "ERROR: used a template_value, but no property has SHP_VAL_HERE set!";
-      }
-    }
-    return null;
-  },
-
-  read: function(input_filename, cb) {
+  /////////////////////////////////////////////////////////////////////////////////////////
+  // Loops through the features, and looks at the properties to try and figure out which
+  // column name is correct for each thing given in the config.  Assumes that all features 
+  // will have the same property name, so once it's found we don't need to keep looking.
+  // Resolves to an object containing the shapefile-column-to-oada-rx-column name mapping.
+  guessColumns: function(data, config) {
     var self = this;
-    shapefilelib.read(input_filename, function(err, data) { 
-      if (err) return cb(err);
-      return cb(null, data);
-    });
-  },
+    return new Promise(function(resolve, reject) {
+      var namespace_props = config.namespace["oada.planting.prescription"];
+      var colname_mappings = {};
 
-  convert: function(data, config, input_filename, cb) {
-    var self = this;
+      // First, loop through each type of thing listed in config:
+      _.each(namespace_props, function(oada_val, oada_key) {
+        var colname;
+        if (oada_key === 'src') return true; // ignore src
+        // Currently, we only know how to deal with population:
 
-    var err = self.validateConfig(config);
-    if (err) return cb(err);
-
-    var zones = {};
-    var namespace_props = config.namespace["oada.planting.prescription"];
-    var master_geojson = {
-      type: "FeatureCollection",
-      features: []
-    };
-
-    // First, if the config has default values for any properties, put them in the
-    // "default" zone:
-    var zone_obj = {};
-    _.each(namespace_props, function(prop_cfg, prop_key) {
-      if (typeof prop_cfg.default !== 'undefined') {
-        zone_obj[prop_key] = prop_cfg.default;
-      }
-    });
-    zones['default'] = zone_obj;
-
-    // Loop through each of the features, creating one output feature for each
-    // input feature.
-    _.each(data.features, function(f) {
-
-      var zone_obj = {};
-      // For each of the properties defined in the namespace, find the corresponding
-      // column in the shapefile and copy the value over:
-      _.each(namespace_props, function(prop_cfg, prop_key) {
-        if (prop_key === 'src') return true; // continue on
-        // If the name is given to us directly, this is easy:
-        if (typeof prop_cfg.shapefile_col_name !== 'undefined') {
-          zone_obj[prop_key] = self.sanitizePropVal(f.properties[prop_cfg.shapefile_col_name], prop_cfg.template_value);
-
-        // If it's a range question, then we have to loop through all props on the feature to find
-        // what we want.
-        } else if (typeof prop_cfg.shapefile_col_number_range !== 'undefined') {
-          var min = prop_cfg.shapefile_col_number_range.min;
-          var max = prop_cfg.shapefile_col_number_range.max;
-          // find a column in shp_props that is a number and lies in the min/max range:
-          _.each(f.properties, function(fp) {
-            var num = +fp; // coerce to number
-            if (num >= min && num <= max) {
-              // Found it, put it in the zone object:
-              zone_obj[prop_key] = self.sanitizePropVal(fp, prop_cfg.template_value);
-              // No need to keep looking
-              return false;
-            }
-          });
+        if (oada_key === 'population') { 
+          colname = self.colMappers.population(oada_val, data);
         }
+        // Add any other column types here over time
+  
+        if (typeof colname !== 'string' || colname.length < 1) {
+          // Throw an error, conversion will not be successful
+          throw new Error("ERROR: could not figure out the name of the " + oada_key + " column in the shapefile!");
+        }
+        // Store the mapping for oada_key -> shp_population_col
+        colname_mappings[oada_key] = colname;
+      });
+      resolve(colname_mappings);
+    });
+  },
 
-        // Check if we actually got the property set:
-        if (typeof zone_obj[prop_key] === 'undefined') {
-          cb("ERROR: could not map property "+prop_key+" from shapefile using config!");
-          return false;
+
+  ///////////////////////////////////////////////////////////////////
+  // colMappers is a set of functions that search the properties
+  // from the shapefile for a column that could be a particular type.
+  // Each returns a string that represents the name of the shapefile
+  // property it finds, or null if it can't find a reasonable one.
+  colMappers: {
+
+    population: function(namespace_props, data) {
+      // If they gave us a shp_col_name in the converter options in config, just
+      // use it directly:
+      if (namespace_props.converter && namespace_props.converter.shp_col_name) {
+        return namespace_props.converter.shp_col_name; // If they gave us one, use it
+      }
+
+      // Otherwise, guess:
+      // Data is a feature collection: it has an array of "features"
+      // and each feature has a properties object
+      var colname = false;
+      _.each(data.features, function(f, result) {
+        // First look for POPULATION (case insensitive):
+        colname = _.findKey(f.properties, function(p, key) {
+          return (key.toUpperCase() === "POPULATION") 
+        });
+        // If we found it, stop looking:
+        if (colname) return false;
+
+        // Next, look for something that can be coerced to a number:
+        // Future modifications: this won't work well for a prescripton that
+        // combines many things that can be numbers.  We should figure out 
+        // a means of searching for a valid range based on the default value
+        // and the units, or an explicitly-listed min/max
+        colname = _.findKey(f.properties, function(p, key) {
+          return !isNaN(p);
+        });
+        // If we found a number, stop looking:
+        if (colname) return false;
+      });
+      return colname;
+    },
+
+  },
+
+
+  ////////////////////////////////////////////////////////////////
+  // Convert takes the geojson derived from the shapefile, the
+  // colname mappings from guessColumns, and 
+  // turns it into the OADA planting prescription object format
+  convert: function(data, colname_mappings, config, output_filename) {
+    var self = this;
+
+    return new Promise(function(resolve, reject) {
+
+      // Setup the namespace: remove any "converter" keys
+      var namespace_props = _.cloneDeep(config.namespace["oada.planting.prescription"]);
+      _.each(namespace_props, function(p) {
+        if (typeof p.converter !== 'undefined') delete p.converter;
+      });
+  
+  
+      // Setup the zones:
+      var zones = { default: {} };
+      // If the config has default values, put into "default" zone:
+      _.each(namespace_props, function(prop_val, prop_key) {
+        if (typeof prop_val.default !== 'undefined') {
+          zones.default[prop_key] = prop_val;
         }
       });
- 
-      // zone_obj is now fully built, see if we have a duplicate in zones for 
-      // zone_obj already:
-      var zone_id = _.findKey(zones, function(z) { 
-        dbg("_isEqual(",z,",",zone_obj,")"); 
-        return _.isEqual(z, zone_obj); 
-      });
-      if (typeof zone_id !== 'string') {
-        // Make a new zone_id and put it in zones
-        zone_id = self.newZoneId(zones);
-        zones[zone_id] = zone_obj;
-      }
- 
-      // Now set the geometry and properties on the one geojson feature we're building
-      // in this loop iteration:
-      var one_feature = {
-        type: "Feature",
-        geometry: f.geometry,
-        properties: { zone: zone_id }
+  
+      // Setup the master geojson:
+      var master_geojson = {
+        type: "FeatureCollection",
+        features: []
       };
- 
-      // Push the feature onto the master list of features:
-      master_geojson.features.push(one_feature);
-    });
+  
+      // Loop through each of the features, creating one output feature for each
+      // input feature.
+      _.each(data.features, function(f) {
+  
+        var zone_obj = {};
+        // Create an output for each of the columns listed in the namespace:
+        _.each(namespace_props, function(prop_cfg, prop_key) {
+          if (prop_key === 'src') return true; // continue on, ignore src
 
-    // Main conversion is done. Create the final object to be written to the disk.
-    var ret = {
-      name: self.sanitizeNameFromConfig(config.name, input_filename),
-      namespace: self.sanitizeNamespaceFromConfig(config.namespace),
-      zones: zones,
-      geojson: master_geojson
-    };
-    cb(null, ret);
+          // We only handle population values at the moment:
+          if (prop_key === 'population') {
+            var shp_col = colname_mappings.population;
+            zone_obj.population = { value: f.properties[shp_col] };
+          } else {
+            throw new Error("Converter currently does not support data type " + prop_key);
+          }
+        });
+   
+        // zone_obj is now fully built, see if we have a duplicate in zones already:
+        var zone_id = _.findKey(zones, function(z) { 
+          return _.isEqual(z, zone_obj); 
+        });
+        if (typeof zone_id !== 'string') {
+          // Make a new zone_id and put it in zones
+          zone_id = self.newZoneId(zones);
+          zones[zone_id] = _.cloneDeep(zone_obj);
+        }
+   
+        // Copy the feature from the incoming geojson, and replace the 
+        // properties with the proper one for the format:
+        var one_feature = _.cloneDeep(f);
+        one_feature.properties = { zone: zone_id };
+   
+        // Push the feature onto the master list of features:
+        master_geojson.features.push(one_feature);
+      });
+  
+      // Main conversion is done. Create the final object to be written to the disk.
+      resolve({
+        name: self.sanitizeNameFromConfig(config, output_filename),
+        namespace: namespace_props,
+        zones: zones,
+        geojson: master_geojson
+      });
+    });
   },
 
+  ////////////////////////////////////////////////////////////////////////////////////////////
   // Since zoneid's only need to be locally unique, let's just make them incrementing numbers
   // for simplicity:
   newZoneId: function(zones) {
-    return (_.size(zones)+1) + "";
+    return (_.size(zones)) + "";
   },
 
+  ////////////////////////////////////////////////////////////////////////////////
   // Name can either be specified in the config directly, or the config
-  // can instruct us to use the filename as the name.  If neither, the
+  // can instruct us to use the output filename as the name.  If neither, the
   // current date is used.
-  sanitizeNameFromConfig: function(config_name, input_filename) {
-    if (typeof config_name === 'string') return config_name;
-    if (typeof config_name === 'object'
-        && config_name.same_as_file) { return input_filename; }
-    return (new Date()).toString();
+  sanitizeNameFromConfig: function(config, output_filename) {
+    if (typeof config.name === 'string') return config.name;
+    if (config.name && config.name.converter
+        && config.name.converter.same_as_output_filename) { 
+      return output_filename; 
+    }
+    return (new Date()).toString().replace(" ", "_"); // default to just current date
   },
 
-  // Get rid of the special stuff for config that doesn't belong in the
-  // final output's namespace
-  sanitizeNamespaceFromConfig: function(config_namespace) {
-    var ret = _.cloneDeep(config_namespace);
-    _.each(ret["oada.planting.prescription"], function(val, key) {
-      if (typeof val.shapefile_col_number_range !== 'undefined') delete val.shapefile_col_number_range;
-      if (typeof val.shapefile_col_name !== 'undefined') delete val.shapefile_col_name;
-      if (typeof val.default !== 'undefined') delete val.default;
-      if (typeof val.template_value !== 'undefined') delete val.template_value;
-    });
-    return ret;
-  },
-
-  // This will either return the value unchanged if template_value is null,
-  // otherwise it will iterate over template_value looking for a key whose 
-  // value is "SHP_VAL_HERE"
-  sanitizePropVal: function(shp_val, template_value) {
-    if (typeof template_value === 'undefined') return shp_val; // use it as-is
-    var ret = _.cloneDeep(template_value);
-    _.each(ret, function(tpl_val, tpl_key) {
-      if (tpl_val === 'SHP_VAL_HERE') {
-        ret[tpl_key] = shp_val;
-      }
-    });
-    return ret;
-  },
-
-  write: function(output_filename, data, cb) {
-    fs.writeFile(output_filename, JSON.stringify(data, false, "  "), cb);
+  write: function(data, output_filename) {
+    return fs.writeFileAsync(output_filename, JSON.stringify(data, false, "  "));
   },
 
 };

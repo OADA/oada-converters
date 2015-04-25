@@ -1,19 +1,12 @@
 {
   "name": {
-    "same_as_file": true
+    "converter": { "same_as_output_filename": true }
   },
   "namespace": {
-    "oada.planting.prescription": {
-      "src": "https://github.com/oada/oada-docs/formats/planting/prescription",
+    "oada.planting.prescription":  {
+      "src": "https://github.com/oada/oada-docs/formats/planting.prescription.js",
       "population": {
-        "shapefile_col_number_range": {
-          "min": 10000,
-          "max": 50000
-        },
-        "template_value": {
-          "value": "SHP_VAL_HERE"
-        },
-        "units": "seeds/ac",
+        "units": "seeds/acre",
         "default": { "value": 32000 }
       }
     }

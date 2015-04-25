@@ -4,9 +4,10 @@
   "description": "Converts shapefile prescriptions to OADA prescriptions",
   "main": "app.js",
   "dependencies": {
+    "bluebird": "^2.9.24",
     "lodash": "^3.7.0",
     "minimist": "^1.1.1",
-    "shapefile": "^0.3.0"
+    "shpjs": "^3.1.6"
   },
   "devDependencies": {},
   "scripts": {

@@ -16,17 +16,31 @@ var config = null;
 var output_filename = null;
 var input_filename = null;
 
+// Input file: last arg on command line
 if (argv._.length !== 1) {
   return console.log(usage_msg + "ERROR: you did not specify an input file");
 } else {
   input_filename = argv._[0];
 }
+
+// Config: -c <config_file> OR defaults to config.json
 if (typeof argv.c !== 'undefined') {
   config = JSON.parse(fs.readFileSync(argv.c));
+} else {
+  config = JSON.parse(fs.readFileSync(__dirname + "/config.json"));
 }
+
+// Output: -o <out_file> OR defaults to input_file.orx
 if (typeof argv.o !== 'undefined') {
   output_filename = argv.o;
+} else {
+  if (input_filename.match(/\.shp$/)) {
+    output_filename = input_filename.replace(/\.shp$/, ".orx");
+  } else {
+    output_filename = input_filename + ".orx";
+  }
 }
+
 _.each(argv, function(val, key) {
   if (key !== '_' &&
       key !== 'c' &&
