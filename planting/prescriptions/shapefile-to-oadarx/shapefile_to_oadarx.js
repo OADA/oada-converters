@@ -56,7 +56,7 @@ var _ShapeToOADARx = {
       fs.readFileAsync(input_filename + ".shp"),
       fs.readFileAsync(input_filename + ".dbf")
     ]).then(function(args) {
-      shp.combine([shp.parseShp(args[0]), shp.parseDbf(args[1])]);
+      return shpjs.combine([shpjs.parseShp(args[0]), shpjs.parseDbf(args[1])]);
     });
   },
 
@@ -143,12 +143,8 @@ var _ShapeToOADARx = {
   convert: function(data, colname_mappings, config, output_filename) {
     var self = this;
 
-    // Setup the namespace: remove any "converter" keys
+    // Get the namespace for easy access later:
     var namespace_props = _.cloneDeep(config.namespace["oada.planting.prescription"]);
-    _.each(namespace_props, function(p) {
-      if (typeof p.converter !== 'undefined') delete p.converter;
-    });
-  
   
     // Setup the zones:
     var zones = { default: {} };
@@ -203,7 +199,7 @@ var _ShapeToOADARx = {
     // Main conversion is done. Create the final object to be written to the disk.
     return {
       name: self.sanitizeNameFromConfig(config, output_filename),
-      namespace: namespace_props,
+      namespace: config.namespace,
       zones: zones,
       geojson: master_geojson
     };
