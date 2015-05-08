@@ -1,7 +1,7 @@
 var _ = require('lodash');
 var Promise = require("bluebird");
 Promise.longStackTraces();
-var shp = require("shpjs");
+var shpjs = require("shpjs");
 var fs = Promise.promisifyAll(require("fs"));
 
 var config = null;
@@ -14,28 +14,26 @@ var _ShapeToOADARx = {
 
   ///////////////////////////////////////////////////////////////////////
   // Main function to perform the conversion:
-  run: function(input_filename, output_filename, config, cb) {
+  run: function(input_filename, output_filename, config) {
     var self = this;
-    return new Promise(function(resolve, reject) {
-      var shp_data;
-      var oada_data;;
-      // Read the shape file:
-      self.read(input_filename)
-      
-      .then(function(data) {
-        shp_data = data;
-        return self.guessColumns(shp_data, config)
+    var shp_data;
+    var oada_data;
 
-      }).then(function(colname_mappings) {
-        return self.convert(shp_data, colname_mappings, config, output_filename);
+    // Read the shape file:
+    return self.read(input_filename)
+    
+    .then(function(data) {
+      shp_data = data;
+      return self.guessColumns(shp_data, config)
 
-      }).then(function(converted_data) {
-        oada_data = converted_data;
-        return self.write(oada_data, output_filename);
+    }).then(function(colname_mappings) {
+      return self.convert(shp_data, colname_mappings, config, output_filename);
 
-      }).then(resolve)
-      .catch(reject);
-    });   
+    }).then(function(converted_data) {
+      oada_data = converted_data;
+      return self.write(oada_data, output_filename);
+    });
+
   },
 
 
@@ -45,23 +43,19 @@ var _ShapeToOADARx = {
   // file (i.e. from S3....), but you'll have to add an if statement
   // to check for http(s)....
   read: function(input_filename) {
-    return new Promise(function(resolve, reject) {
-      var str = "";
-      if (input_filename.slice(-4) === ".zip") {
-        // .zip works!
-        fs.readFileAsync(input_filename).then(function(buffer) {
-          shp(buffer).then(resolve).catch(reject);
-        });
-        return;
-      }
-      // remove extension for library if it's .shp.
-      input_filename = input_filename.replace(".shp", "");
-      Promise.all([
-        fs.readFileAsync(input_filename + ".shp"),
-        fs.readFileAsync(input_filename + ".dbf")
-      ]).then(function(args) {
-        resolve(shp.combine([shp.parseShp(args[0]), shp.parseDbf(args[1])]));
-      }).catch(reject);
+    var str = "";
+    if (input_filename.slice(-4) === ".zip") {
+      // .zip works!
+      return fs.readFileAsync(input_filename)
+      .then(shpjs); // sends the buffer directly to shpjs
+    }
+    // remove extension for library if it's .shp.
+    input_filename = input_filename.replace(".shp", "");
+    return Promise.all([
+      fs.readFileAsync(input_filename + ".shp"),
+      fs.readFileAsync(input_filename + ".dbf")
+    ]).then(function(args) {
+      shp.combine([shp.parseShp(args[0]), shp.parseDbf(args[1])]);
     });
   },
 
@@ -73,30 +67,28 @@ var _ShapeToOADARx = {
   // Resolves to an object containing the shapefile-column-to-oada-rx-column name mapping.
   guessColumns: function(data, config) {
     var self = this;
-    return new Promise(function(resolve, reject) {
-      var namespace_props = config.namespace["oada.planting.prescription"];
-      var colname_mappings = {};
+    var namespace_props = config.namespace["oada.planting.prescription"];
+    var colname_mappings = {};
 
-      // First, loop through each type of thing listed in config:
-      _.each(namespace_props, function(oada_val, oada_key) {
-        var colname;
-        if (oada_key === 'src') return true; // ignore src
-        // Currently, we only know how to deal with population:
+    // Loop through each type of thing listed in config:
+    _.each(namespace_props, function(oada_val, oada_key) {
+      var colname;
+      if (oada_key === 'src') return true; // ignore src
+      // Currently, we only know how to deal with population:
 
-        if (oada_key === 'population') { 
-          colname = self.colMappers.population(oada_val, data);
-        }
-        // Add any other column types here over time
-  
-        if (typeof colname !== 'string' || colname.length < 1) {
-          // Throw an error, conversion will not be successful
-          throw new Error("ERROR: could not figure out the name of the " + oada_key + " column in the shapefile!");
-        }
-        // Store the mapping for oada_key -> shp_population_col
-        colname_mappings[oada_key] = colname;
-      });
-      resolve(colname_mappings);
+      if (oada_key === 'population') { 
+        colname = self.colMappers.population(oada_val, data);
+      }
+      // Add any other column types here over time
+
+      if (typeof colname !== 'string' || colname.length < 1) {
+        // Throw an error, conversion will not be successful
+        throw new Error("ERROR: could not figure out the name of the " + oada_key + " column in the shapefile!");
+      }
+      // Store the mapping for oada_key -> shp_population_col
+      colname_mappings[oada_key] = colname;
     });
+    return colname_mappings;
   },
 
 
@@ -150,75 +142,72 @@ var _ShapeToOADARx = {
   convert: function(data, colname_mappings, config, output_filename) {
     var self = this;
 
-    return new Promise(function(resolve, reject) {
-
-      // Setup the namespace: remove any "converter" keys
-      var namespace_props = _.cloneDeep(config.namespace["oada.planting.prescription"]);
-      _.each(namespace_props, function(p) {
-        if (typeof p.converter !== 'undefined') delete p.converter;
-      });
-  
-  
-      // Setup the zones:
-      var zones = { default: {} };
-      // If the config has default values, put into "default" zone:
-      _.each(namespace_props, function(prop_val, prop_key) {
-        if (typeof prop_val.default !== 'undefined') {
-          zones.default[prop_key] = prop_val;
-        }
-      });
-  
-      // Setup the master geojson:
-      var master_geojson = {
-        type: "FeatureCollection",
-        features: []
-      };
-  
-      // Loop through each of the features, creating one output feature for each
-      // input feature.
-      _.each(data.features, function(f) {
-  
-        var zone_obj = {};
-        // Create an output for each of the columns listed in the namespace:
-        _.each(namespace_props, function(prop_cfg, prop_key) {
-          if (prop_key === 'src') return true; // continue on, ignore src
-
-          // We only handle population values at the moment:
-          if (prop_key === 'population') {
-            var shp_col = colname_mappings.population;
-            zone_obj.population = { value: f.properties[shp_col] };
-          } else {
-            throw new Error("Converter currently does not support data type " + prop_key);
-          }
-        });
-   
-        // zone_obj is now fully built, see if we have a duplicate in zones already:
-        var zone_id = _.findKey(zones, function(z) { 
-          return _.isEqual(z, zone_obj); 
-        });
-        if (typeof zone_id !== 'string') {
-          // Make a new zone_id and put it in zones
-          zone_id = self.newZoneId(zones);
-          zones[zone_id] = _.cloneDeep(zone_obj);
-        }
-   
-        // Copy the feature from the incoming geojson, and replace the 
-        // properties with the proper one for the format:
-        var one_feature = _.cloneDeep(f);
-        one_feature.properties = { zone: zone_id };
-   
-        // Push the feature onto the master list of features:
-        master_geojson.features.push(one_feature);
-      });
-  
-      // Main conversion is done. Create the final object to be written to the disk.
-      resolve({
-        name: self.sanitizeNameFromConfig(config, output_filename),
-        namespace: namespace_props,
-        zones: zones,
-        geojson: master_geojson
-      });
+    // Setup the namespace: remove any "converter" keys
+    var namespace_props = _.cloneDeep(config.namespace["oada.planting.prescription"]);
+    _.each(namespace_props, function(p) {
+      if (typeof p.converter !== 'undefined') delete p.converter;
     });
+  
+  
+    // Setup the zones:
+    var zones = { default: {} };
+    // If the config has default values, put into "default" zone:
+    _.each(namespace_props, function(prop_val, prop_key) {
+      if (typeof prop_val.default !== 'undefined') {
+        zones.default[prop_key] = prop_val;
+      }
+    });
+  
+    // Setup the master geojson:
+    var master_geojson = {
+      type: "FeatureCollection",
+      features: []
+    };
+  
+    // Loop through each of the features, creating one output feature for each
+    // input feature.
+    _.each(data.features, function(f) {
+ 
+      var zone_obj = {};
+      // Create an output for each of the columns listed in the namespace:
+      _.each(namespace_props, function(prop_cfg, prop_key) {
+        if (prop_key === 'src') return true; // continue on, ignore src
+
+        // We only handle population values at the moment:
+        if (prop_key === 'population') {
+          var shp_col = colname_mappings.population;
+          zone_obj.population = { value: f.properties[shp_col] };
+        } else {
+          throw new Error("Converter currently does not support data type " + prop_key);
+        }
+      });
+   
+      // zone_obj is now fully built, see if we have a duplicate in zones already:
+      var zone_id = _.findKey(zones, function(z) { 
+        return _.isEqual(z, zone_obj); 
+      });
+      if (typeof zone_id !== 'string') {
+        // Make a new zone_id and put it in zones
+        zone_id = self.newZoneId(zones);
+        zones[zone_id] = _.cloneDeep(zone_obj);
+      }
+   
+      // Copy the feature from the incoming geojson, and replace the 
+      // properties with the proper one for the format:
+      var one_feature = _.cloneDeep(f);
+      one_feature.properties = { zone: zone_id };
+ 
+      // Push the feature onto the master list of features:
+      master_geojson.features.push(one_feature);
+    });
+  
+    // Main conversion is done. Create the final object to be written to the disk.
+    return {
+      name: self.sanitizeNameFromConfig(config, output_filename),
+      namespace: namespace_props,
+      zones: zones,
+      geojson: master_geojson
+    };
   },
 
   ////////////////////////////////////////////////////////////////////////////////////////////
