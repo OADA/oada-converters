@@ -36,6 +36,8 @@ if (typeof argv.o !== 'undefined') {
 } else {
   if (input_filename.match(/\.shp$/)) {
     output_filename = input_filename.replace(/\.shp$/, ".orx");
+  } else if (input_filename.match(/\.zip$/)) {
+    output_filename = input_filename.replace(/\.zip$/, ".orx");
   } else {
     output_filename = input_filename + ".orx";
   }

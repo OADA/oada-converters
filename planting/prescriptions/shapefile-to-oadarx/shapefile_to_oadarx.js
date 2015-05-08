@@ -3,6 +3,7 @@ var Promise = require("bluebird");
 Promise.longStackTraces();
 var shpjs = require("shpjs");
 var fs = Promise.promisifyAll(require("fs"));
+var path = require('path');
 
 var config = null;
 var input_filename = null;
@@ -225,7 +226,8 @@ var _ShapeToOADARx = {
     if (typeof config.name === 'string') return config.name;
     if (config.name && config.name.converter
         && config.name.converter.same_as_output_filename) { 
-      return output_filename; 
+      // Remove any leading paths from the filename
+      return path.basename(output_filename); 
     }
     return (new Date()).toString().replace(" ", "_"); // default to just current date
   },
