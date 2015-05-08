@@ -153,11 +153,9 @@ var _ShapeToOADARx = {
     // Setup the zones:
     var zones = { default: {} };
     // If the config has default values, put into "default" zone:
-    _.each(namespace_props, function(prop_val, prop_key) {
-      if (typeof prop_val.default !== 'undefined') {
-        zones.default[prop_key] = prop_val;
-      }
-    });
+    if (_.has(config, "zones")) {
+      zones = config.zones; // there is a default set of zones specified
+    }
   
     // Setup the master geojson:
     var master_geojson = {
@@ -215,7 +213,7 @@ var _ShapeToOADARx = {
   // Since zoneid's only need to be locally unique, let's just make them incrementing numbers
   // for simplicity:
   newZoneId: function(zones) {
-    return (_.size(zones)) + "";
+    return (_.size(zones)) + ""; // Coerce to string
   },
 
   ////////////////////////////////////////////////////////////////////////////////

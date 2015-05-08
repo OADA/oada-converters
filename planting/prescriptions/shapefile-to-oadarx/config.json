@@ -6,9 +6,13 @@
     "oada.planting.prescription":  {
       "src": "https://github.com/oada/oada-docs/formats/planting.prescription.js",
       "population": {
-        "units": "seeds/acre",
-        "default": { "value": 32000 }
+        "units": "seeds/acre"
       }
+    }
+  },
+  "zones": {
+    "default": {
+      "population": { "value": 32000 }
     }
   }
 }
